@@ -127,6 +127,19 @@ function haversineKm(lat1, lon1, lat2, lon2){
 // ---------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------
+app.get('/', (req, res) => {
+  res.json({
+    service: 'gnss-proxy — Estación Sísmica',
+    status: 'ok',
+    note: 'Este es un servicio backend sin interfaz visual. Usa los endpoints de abajo.',
+    endpoints: {
+      health: '/health',
+      raw_sample: '/api/gnss/raw-sample',
+      gnss_query: '/api/gnss?minlat=..&maxlat=..&minlon=..&maxlon=..&maxStations=8'
+    }
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
