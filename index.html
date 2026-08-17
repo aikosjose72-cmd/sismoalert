@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Estación Sísmica · Monitoreo en tiempo real</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #090c10;
+    --panel: #10151b;
+    --panel-2: #0c1015;
+    --border: #1e262f;
+    --border-soft: #171e26;
+    --text: #e7ecf1;
+    --text-mute: #7c8a99;
+    --text-dim: #4c5866;
+    --live: #f2a93b;
+    --live-dim: #6b5227;
+    --safe: #52c785;
+    --crit: #e5484d;
+    --crit-dim: #4a2224;
+    --exp: #a78bfa;
+    --exp-dim: #382c5c;
+    --exp-bg: #14101f;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+  }
+  .mono{ font-family:'JetBrains Mono', monospace; }
+  .disp{ font-family:'Space Grotesk', sans-serif; }
+
+  /* ---------- HEADER ---------- */
+  header{
+    height: 68px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding: 0 20px;
+    position: relative;
+    overflow:hidden;
+  }
+  .brand{ display:flex; align-items:center; gap:12px; z-index:2; }
+  .brand-mark{
+    width:38px; height:38px; border-radius:8px;
+    border:1px solid var(--live-dim);
+    background: radial-gradient(circle at 30% 30%, rgba(242,169,59,0.18), transparent 70%);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .pulse-dot{ width:8px; height:8px; border-radius:50%; background:var(--live); box-shadow:0 0 0 0 rgba(242,169,59,.6); animation: pulse 2s infinite; }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(242,169,59,.5); }
+    70%{ box-shadow:0 0 0 8px rgba(242,169,59,0); }
+    100%{ box-shadow:0 0 0 0 rgba(242,169,59,0); }
+  }
+  .brand h1{ font-size:14px; letter-spacing:.14em; font-weight:600; }
+  .brand p{ font-size:11px; color:var(--text-mute); margin-top:2px; }
+  .waveform-wrap{
+    position:absolute; left:0; right:0; bottom:0; height:26px; opacity:.55; z-index:1;
+  }
+  .waveform-wrap svg{ width:200%; height:100%; animation: scroll-wave 9s linear infinite; }
+  @keyframes scroll-wave{ from{ transform:translateX(0); } to{ transform:translateX(-50%); } }
+
+  .status-cluster{ display:flex; align-items:center; gap:10px; z-index:2; }
+  .status-pill{
+    font-size:11px; padding:6px 10px; border-radius:6px;
+    border:1px solid var(--border); background:var(--panel);
+    display:flex; align-items:center; gap:6px;
+  }
+  .clock{ font-size:12px; color:var(--text-mute); min-width:76px; text-align:right; }
+
+  /* ---------- LAYOUT ---------- */
+  .layout{
+    display:grid;
+    grid-template-columns: 320px 1fr 340px;
+    height: calc(100vh - 68px);
+  }
+  aside{ background:var(--panel-2); overflow-y:auto; }
+  aside::-webkit-scrollbar{ width:6px; }
+  aside::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+  .left{ border-right:1px solid var(--border); }
+  .right{ border-left:1px solid var(--border); }
+  .pad{ padding:16px; }
+  main{ position:relative; background:#0c1116; }
+  #map{ width:100%; height:100%; }
+
+  .section-title{
+    font-size:11px; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--text-mute); font-weight:600;
+    display:flex; align-items:center; gap:6px; margin-bottom:10px;
+  }
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px;
+  }
+  .coord-box p{ font-size:11px; color:var(--text-mute); }
+  .coord-box .val{ font-size:15px; margin-top:2px; }
+
+  .feed-item{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:10px; margin-bottom:8px; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  .feed-item:hover{ border-color:#2a333e; background:#131a21; }
+  .feed-item.crit{ border-color:var(--crit-dim); background: rgba(229,72,77,.06); }
+  .feed-row{ display:flex; justify-content:space-between; align-items:center; }
+  .mag-badge{ font-size:12px; font-weight:700; padding:2px 7px; border-radius:5px; background:#20242c; color:var(--live); }
+  .mag-badge.crit{ background: var(--crit-dim); color:#ff8b8f; }
+  .mag-badge.mid{ background:#33291a; color:#f2a93b; }
+  .feed-place{ font-size:12px; color:#c7d0d9; margin-top:6px; }
+  .feed-meta{ display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-dim); margin-top:6px; padding-top:6px; border-top:1px dashed var(--border-soft); }
+  .warn-ok{ color:var(--safe); font-weight:600; }
+  .warn-mid{ color:var(--live); font-weight:600; }
+
+  .note-box{
+    background: rgba(82,199,133,0.05); border:1px solid #1f3a2c; border-radius:10px;
+    padding:12px; font-size:11px; color:#9ad4b3; line-height:1.5;
+  }
+
+  /* ---------- STATS ---------- */
+  .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+  .stat-box{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px; }
+  .stat-box .num{ font-size:20px; font-weight:600; }
+  .stat-box .lbl{ font-size:10px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
+
+  .bars{ display:flex; align-items:flex-end; gap:4px; height:70px; margin-top:4px; }
+  .bar{ flex:1; background:linear-gradient(to top, var(--live-dim), var(--live)); border-radius:2px 2px 0 0; min-height:2px; }
+
+  /* ---------- EXPERIMENTAL ---------- */
+  .exp-wrap{
+    margin-top:18px; border:1px dashed var(--exp-dim); border-radius:12px; background:var(--exp-bg); padding:14px;
+  }
+  .exp-flag{
+    display:inline-flex; align-items:center; gap:6px; font-size:10px; font-weight:700; letter-spacing:.08em;
+    color:#c9b8ff; background:var(--exp-dim); border-radius:5px; padding:3px 8px; margin-bottom:8px;
+  }
+  .exp-disclaimer{
+    font-size:10.5px; color:#b7a9db; line-height:1.5; margin-bottom:12px; padding-bottom:12px; border-bottom:1px dashed var(--exp-dim);
+  }
+  .exp-region{
+    background:#181229; border:1px solid var(--exp-dim); border-radius:8px; padding:10px; margin-bottom:8px;
+  }
+  .exp-region-top{ display:flex; justify-content:space-between; align-items:center; }
+  .exp-region-name{ font-size:12.5px; font-weight:600; color:#e4d9ff; }
+  .exp-score{ font-family:'JetBrains Mono', monospace; font-size:15px; font-weight:700; color:var(--exp); }
+  .exp-bar-track{ height:5px; background:#241a3d; border-radius:3px; margin-top:8px; overflow:hidden; }
+  .exp-bar-fill{ height:100%; background:linear-gradient(90deg, #6d4fc7, var(--exp)); }
+  .exp-meta{ display:flex; justify-content:space-between; font-size:10px; color:#9484c2; margin-top:8px; }
+
+  button.ghost{
+    width:100%; margin-top:10px; background:transparent; border:1px solid var(--exp-dim); color:var(--exp);
+    font-size:11px; font-weight:600; padding:8px; border-radius:7px; cursor:pointer; transition: background .15s;
+  }
+  button.ghost:hover{ background:rgba(167,139,250,.08); }
+
+  .track-log{ margin-top:12px; max-height:180px; overflow-y:auto; }
+  .track-row{
+    display:flex; justify-content:space-between; font-size:10.5px; padding:6px 0; border-bottom:1px solid #1c1530; color:#c3b6e6;
+  }
+  .track-status{ font-weight:700; }
+  .track-status.pend{ color:#9484c2; }
+  .track-status.hit{ color:#7fe0a3; }
+  .track-status.miss{ color:#ff8b8f; }
+
+  footer.bar{
+    grid-column: 1 / -1;
+  }
+
+  ::selection{ background: var(--live-dim); }
+
+  @media (max-width: 980px){
+    .layout{ grid-template-columns: 1fr; grid-template-rows: auto 45vh auto; height:auto; overflow-y:auto; }
+    body{ overflow:auto; }
+    main{ height:45vh; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="waveform-wrap">
+    <svg viewBox="0 0 1000 60" preserveAspectRatio="none">
+      <path d="M0,30 L40,30 L48,10 L56,50 L64,18 L72,30 L120,30 L128,30 L136,4 L144,56 L152,22 L160,30 L220,30 L400,30 L408,14 L416,44 L424,30 L480,30 L500,30 L508,8 L516,52 L524,20 L532,30 L600,30 L780,30 L788,16 L796,42 L804,30 L860,30 L1000,30
+      M1000,30 L1040,30 L1048,10 L1056,50 L1064,18 L1072,30 L1120,30 L1128,30 L1136,4 L1144,56 L1152,22 L1160,30 L1220,30 L1400,30 L1408,14 L1416,44 L1424,30 L1480,30 L1500,30 L1508,8 L1516,52 L1524,20 L1532,30 L1600,30 L1780,30 L1788,16 L1796,42 L1804,30 L1860,30 L2000,30"
+      fill="none" stroke="#f2a93b" stroke-width="1.4"/>
+    </svg>
+  </div>
+  <div class="brand">
+    <div class="brand-mark"><div class="pulse-dot"></div></div>
+    <div>
+      <h1>ESTACIÓN&nbsp;SÍSMICA <span style="color:var(--live)">·</span> MONITOREO&nbsp;VIVO</h1>
+      <p>Datos reales USGS · Alerta temprana por física de propagación de ondas</p>
+    </div>
+  </div>
+  <div class="status-cluster">
+    <div class="clock mono" id="clock">--:--:--</div>
+    <div class="status-pill" id="api-status"><span class="pulse-dot" style="animation:none;background:var(--text-dim)"></span> Conectando…</div>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: location + live feed -->
+  <aside class="left">
+    <div class="pad">
+      <div class="section-title">◎ Tu nodo receptor</div>
+      <div class="card coord-box">
+        <p>Coordenadas de referencia</p>
+        <p class="val mono" id="user-coords">detectando…</p>
+        <p style="font-size:10.5px;color:var(--text-dim);margin-top:8px;line-height:1.5;">Se usa para calcular el tiempo de viaje de la onda S destructiva desde cada sismo detectado hasta tu ubicación.</p>
+      </div>
+
+      <div style="height:18px"></div>
+      <div class="section-title">
+        <span>◉ Sismos recientes</span>
+        <span class="mono" id="counter" style="margin-left:auto;background:#1a2029;color:#c7d0d9;padding:1px 7px;border-radius:5px;font-size:10px;">0</span>
+      </div>
+      <div id="live-feed"></div>
+    </div>
+  </aside>
+
+  <!-- CENTER: map -->
+  <main>
+    <div id="map"></div>
+  </main>
+
+  <!-- RIGHT: stats + experimental -->
+  <aside class="right">
+    <div class="pad">
+      <div class="section-title">▤ Estadísticas reales (30 días, M≥4.5)</div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="num mono" id="stat-count">–</div><div class="lbl">Eventos</div></div>
+        <div class="stat-box"><div class="num mono" id="stat-max">–</div><div class="lbl">Magnitud máx.</div></div>
+        <div class="stat-box"><div class="num mono" id="stat-avg">–</div><div class="lbl">Magnitud media</div></div>
+        <div class="stat-box"><div class="num mono" id="stat-crit">–</div><div class="lbl">Eventos M≥6.0</div></div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <p style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:.06em;">Energía total liberada (30 días)</p>
+        <div class="num mono" id="stat-energy" style="font-size:18px;margin-top:4px;">–</div>
+        <div class="lbl" id="stat-energy-tnt" style="font-size:10px;color:var(--text-mute);">–</div>
+      </div>
+      <div class="card">
+        <p style="font-size:10px;color:var(--text-mute);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Distribución por magnitud</p>
+        <div class="bars" id="mag-bars"></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);margin-top:4px;">
+          <span>4.5–5</span><span>5–5.5</span><span>5.5–6</span><span>6–6.5</span><span>6.5–7</span><span>7+</span>
+        </div>
+      </div>
+      <div class="note-box" style="margin-top:12px;">
+        Estos datos son 100% reales, obtenidos en vivo del catálogo público de USGS. No son una predicción: describen lo que ya ocurrió.
+      </div>
+
+      <!-- EXPERIMENTAL SECTION -->
+      <div class="exp-wrap">
+        <span class="exp-flag">⚠ MODO EXPERIMENTAL — NO SON DATOS REALES</span>
+        <div class="exp-disclaimer">
+          Esta sección <b>no predice sismos reales</b>. Es un modelo heurístico de prueba que combina siete señales calculadas sobre datos reales: tiempo desde el último sismo mayor, actividad reciente, energía liberada frente a la típica de la zona (Kanamori), el <b>valor-b</b> de Gutenberg-Richter, un proxy de <b>productividad de réplicas</b> tipo ETAS, un proxy de <b>aceleración de sismicidad</b>, y —si configuras el proxy GNSS— la <b>deformación cortical real</b> medida por estaciones GPS/GNSS del Nevada Geodetic Laboratory (método MIDAS). Con eso arma un puntaje 0–100 de "atención" por zona. <b>No está validado científicamente</b> ni mide desplazamiento real de placas de forma predictiva — la deformación GNSS es una velocidad de largo plazo, no un aviso de corto plazo, y el desplazamiento mostrado en el mapa por sismo es una estimación empírica de ruptura (Wells &amp; Coppersmith), no una medición de movimiento tectónico futuro. El único propósito de esta sección es quedar registrada y compararse contra lo que realmente ocurra, para evaluar si tiene o no fiabilidad — probablemente no la tenga, y eso también es un resultado válido.
+        </div>
+        <div id="exp-regions"></div>
+
+        <div style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--exp-dim);">
+          <p style="font-size:10px;color:#9484c2;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Deformación cortical real (GNSS · NGL)</p>
+          <div style="display:flex; gap:6px;">
+            <input id="gnss-proxy-url" type="text" placeholder="https://tu-proxy.onrender.com"
+              style="flex:1; background:#181229; border:1px solid var(--exp-dim); color:#e4d9ff; font-size:11px; padding:7px 8px; border-radius:6px; font-family:'JetBrains Mono',monospace;">
+            <button class="ghost" id="gnss-save" style="width:auto; margin-top:0; padding:7px 12px;">Guardar</button>
+          </div>
+          <p id="gnss-status" style="font-size:10px;color:#7a6ea3;margin-top:6px;line-height:1.5;">Sin configurar. Sin esto, la señal de deformación cortical usa un valor neutro. Despliega el proxy de <span class="mono">/gnss-proxy</span> (ver README) y pega aquí su URL pública.</p>
+        </div>
+
+        <button class="ghost" id="exp-generate">Generar predicción de prueba ahora</button>
+        <button class="ghost" id="exp-check" style="border-style:solid;">Revisar aciertos / fallos del historial</button>
+        <div style="margin-top:12px;">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#9484c2;margin-bottom:4px;">
+            <span>Bitácora de predicciones de prueba</span>
+            <span id="exp-accuracy" class="mono">0/0 resueltas</span>
+          </div>
+          <div class="track-log" id="track-log">
+            <div class="track-row"><span>Sin predicciones registradas aún.</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+if (typeof L === 'undefined'){
+  document.getElementById('map').innerHTML = '<div style="padding:24px;color:#e5484d;font-family:JetBrains Mono,monospace;font-size:12px;">No se pudo cargar la librería del mapa (Leaflet) desde el CDN. Verifica tu conexión a internet y recarga la página.</div>';
+  throw new Error('Leaflet no disponible');
+}
+/* =========================================================
+   RELOJ
+========================================================= */
+function tickClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('es-MX');
+}
+setInterval(tickClock, 1000); tickClock();
+
+/* =========================================================
+   ESTADO / UBICACIÓN
+========================================================= */
+let userLocation = [19.4326, -99.1332]; // CDMX por defecto
+document.getElementById('user-coords').textContent = userLocation[0].toFixed(4) + ', ' + userLocation[1].toFixed(4) + ' (predeterminado)';
+
+const map = L.map('map', { zoomControl: false }).setView(userLocation, 3);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  maxZoom: 19
+}).addTo(map);
+L.control.zoom({ position:'topright' }).addTo(map);
+
+const userMarker = L.circleMarker(userLocation, { radius:7, fillColor:'#3b82f6', color:'#fff', weight:2, fillOpacity:1 })
+  .addTo(map).bindPopup('<b>Tu nodo receptor</b>');
+
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(pos => {
+    userLocation = [pos.coords.latitude, pos.coords.longitude];
+    document.getElementById('user-coords').textContent = userLocation[0].toFixed(4) + ', ' + userLocation[1].toFixed(4) + ' (geolocalizado)';
+    userMarker.setLatLng(userLocation);
+    map.setView(userLocation, 4);
+  }, () => {}, { timeout: 6000 });
+}
+
+const quakeLayer = L.layerGroup().addTo(map);
+
+/* =========================================================
+   UTILIDADES
+========================================================= */
+function haversine(lat1, lon1, lat2, lon2){
+  const R = 6371;
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLon = (lon2-lon1) * Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function setStatus(text, color){
+  const el = document.getElementById('api-status');
+  el.innerHTML = '<span class="pulse-dot" style="animation:none;background:'+color+'"></span> ' + text;
+}
+/* ---- Física sísmica real: energía liberada y desplazamiento estimado ----
+   Energía (Kanamori, 1977):           log10(E[J]) = 1.5*M + 4.8
+   Momento sísmico (escala de momento): M0[N·m] = 10^(1.5*M + 9.1)
+   Longitud de ruptura (Wells & Coppersmith, 1994, todos los tipos de falla):
+                                        log10(RLD[km]) = -3.22 + 0.69*M
+   Se asume una relación ancho/largo ~0.5 y un módulo de rigidez μ ≈ 3.2e10 Pa
+   para estimar el área de ruptura y el desplazamiento promedio: d = M0 / (μ·A)
+   Estas son relaciones empíricas estándar en sismología; dan un ORDEN DE MAGNITUD,
+   no una medición directa del sismo real. */
+function energyJoules(mag){
+  return Math.pow(10, 1.5*mag + 4.8);
+}
+function seismicMomentNm(mag){
+  return Math.pow(10, 1.5*mag + 9.1);
+}
+function estimateSlip(mag){
+  const rldKm = Math.pow(10, -3.22 + 0.69*mag);      // longitud de ruptura
+  const rwKm = rldKm * 0.5;                            // ancho aproximado
+  const areaM2 = rldKm * 1000 * rwKm * 1000;
+  const mu = 3.2e10; // Pa, módulo de rigidez cortical típico
+  const m0 = seismicMomentNm(mag);
+  const slipM = m0 / (mu * Math.max(areaM2, 1));
+  return { rldKm, rwKm, slipM };
+}
+function fmtEnergy(joules){
+  if (joules >= 1e15) return (joules/1e15).toFixed(2) + ' PJ';
+  if (joules >= 1e12) return (joules/1e12).toFixed(2) + ' TJ';
+  if (joules >= 1e9) return (joules/1e9).toFixed(2) + ' GJ';
+  return joules.toExponential(2) + ' J';
+}
+function fmtTNT(joules){
+  const tonsT = joules / 4.184e9; // toneladas de TNT
+  if (tonsT >= 1e6) return (tonsT/1e6).toFixed(2) + ' Mt TNT';
+  if (tonsT >= 1e3) return (tonsT/1e3).toFixed(2) + ' kt TNT';
+  return tonsT.toFixed(1) + ' t TNT';
+}
+
+function beep(){
+  try{
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = 880; o.type = 'sine';
+    g.gain.setValueAtTime(0.15, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    o.start(); o.stop(ctx.currentTime + 0.6);
+  }catch(e){}
+}
+
+/* =========================================================
+   FEED EN VIVO + ALERTA TEMPRANA (USGS all_day, real)
+========================================================= */
+async function fetchLiveFeed(){
+  setStatus('Sincronizando con USGS…', 'var(--live)');
+  try{
+    const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson');
+    const data = await res.json();
+    setStatus('EN VIVO · USGS OK', 'var(--safe)');
+    renderFeed(data.features || []);
+  }catch(err){
+    console.error(err);
+    setStatus('Error de conexión con USGS', 'var(--crit)');
+  }
+}
+
+function renderFeed(features){
+  quakeLayer.clearLayers();
+  const feed = document.getElementById('live-feed');
+  feed.innerHTML = '';
+  const sorted = features.slice().sort((a,b) => b.properties.mag - a.properties.mag).slice(0, 20);
+  document.getElementById('counter').textContent = features.length;
+
+  if (sorted.length === 0){
+    feed.innerHTML = '<p style="font-size:11px;color:var(--text-mute);text-align:center;padding:20px 0;">Sin eventos en las últimas 24h.</p>';
+    return;
+  }
+
+  sorted.forEach(ev => {
+    const p = ev.properties;
+    const coords = [ev.geometry.coordinates[1], ev.geometry.coordinates[0]];
+    const mag = p.mag ?? 0;
+    const dist = haversine(userLocation[0], userLocation[1], coords[0], coords[1]);
+    const arrivalSec = Math.round(dist / 4); // onda S ~4 km/s
+
+    let color = '#f2a93b';
+    if (mag >= 6.0) color = '#e5484d'; else if (mag >= 4.5) color = '#f2a93b'; else color = '#8aa0b3';
+
+    const energy = energyJoules(mag);
+    const slip = estimateSlip(mag);
+    L.circle(coords, { color, fillColor: color, fillOpacity:.14, weight:1.4, radius: Math.max(mag,1) * 22000 })
+      .addTo(quakeLayer)
+      .bindPopup(
+        '<div style="font-family:Inter,sans-serif;color:#111;">' +
+        '<b style="color:#b91c1c;">M ' + mag.toFixed(1) + '</b><br>' +
+        '<span style="font-size:12px;">' + (p.place || 'Ubicación desconocida') + '</span><br>' +
+        '<span style="font-size:11px;color:#555;">' + new Date(p.time).toLocaleString('es-MX') + '</span><br>' +
+        '<span style="font-size:11px;">Distancia a tu nodo: ' + Math.round(dist) + ' km</span><br>' +
+        '<span style="font-size:11px;">Energía liberada: ' + fmtEnergy(energy) + ' (' + fmtTNT(energy) + ')</span><br>' +
+        '<span style="font-size:10.5px;color:#777;">Desplaz. de falla estimado*: ' + slip.slipM.toFixed(2) + ' m sobre ~' + slip.rldKm.toFixed(0) + ' km de ruptura</span><br>' +
+        '<span style="font-size:9px;color:#999;">*estimación empírica (Wells & Coppersmith), no medición directa</span>' +
+        '</div>'
+      );
+
+    if (mag >= 6.0 && arrivalSec > 0 && arrivalSec < 300){ beep(); }
+
+    const card = document.createElement('div');
+    card.className = 'feed-item' + (mag >= 6.0 ? ' crit' : '');
+    const badgeClass = mag >= 6.0 ? 'crit' : (mag >= 4.5 ? 'mid' : '');
+    let warnLabel, warnClass;
+    if (arrivalSec > 60){ warnLabel = '≈' + Math.round(arrivalSec/60) + ' min de ventaja'; warnClass = 'warn-ok'; }
+    else if (arrivalSec > 0){ warnLabel = arrivalSec + ' s de ventaja'; warnClass = 'warn-mid'; }
+    else { warnLabel = 'sin ventaja (muy cercano)'; warnClass = 'warn-mid'; }
+
+    card.innerHTML =
+      '<div class="feed-row">' +
+        '<span class="mag-badge ' + badgeClass + '">M ' + mag.toFixed(1) + '</span>' +
+        '<span class="mono" style="font-size:10px;color:var(--text-dim);">' + new Date(p.time).toLocaleTimeString('es-MX') + '</span>' +
+      '</div>' +
+      '<div class="feed-place">' + (p.place || '—') + '</div>' +
+      '<div class="feed-meta"><span>' + Math.round(dist) + ' km · ' + fmtEnergy(energy) + '</span><span class="' + warnClass + '">' + warnLabel + '</span></div>';
+
+    card.addEventListener('click', () => { map.flyTo(coords, 6, { duration: 1 }); });
+    feed.appendChild(card);
+  });
+}
+
+/* =========================================================
+   ESTADÍSTICAS REALES (USGS 4.5_month, real)
+========================================================= */
+async function fetchStats(){
+  try{
+    const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson');
+    const data = await res.json();
+    const mags = (data.features || []).map(f => f.properties.mag).filter(m => m != null);
+    document.getElementById('stat-count').textContent = mags.length;
+    document.getElementById('stat-max').textContent = mags.length ? Math.max(...mags).toFixed(1) : '–';
+    document.getElementById('stat-avg').textContent = mags.length ? (mags.reduce((a,b)=>a+b,0)/mags.length).toFixed(2) : '–';
+    document.getElementById('stat-crit').textContent = mags.filter(m => m >= 6.0).length;
+
+    const totalEnergy = mags.reduce((sum, m) => sum + energyJoules(m), 0);
+    document.getElementById('stat-energy').textContent = fmtEnergy(totalEnergy);
+    document.getElementById('stat-energy-tnt').textContent = 'equivalente a ' + fmtTNT(totalEnergy);
+
+    const buckets = [0,0,0,0,0,0]; // 4.5-5,5-5.5,5.5-6,6-6.5,6.5-7,7+
+    mags.forEach(m => {
+      if (m >= 7) buckets[5]++;
+      else if (m >= 6.5) buckets[4]++;
+      else if (m >= 6) buckets[3]++;
+      else if (m >= 5.5) buckets[2]++;
+      else if (m >= 5) buckets[1]++;
+      else buckets[0]++;
+    });
+    const maxB = Math.max(...buckets, 1);
+    document.getElementById('mag-bars').innerHTML = buckets.map(b =>
+      '<div class="bar" style="height:' + Math.max(4, (b/maxB)*100) + '%" title="' + b + ' eventos"></div>'
+    ).join('');
+  }catch(err){ console.error('stats error', err); }
+}
+
+/* =========================================================
+   SECCIÓN EXPERIMENTAL — claramente separada de datos reales
+========================================================= */
+const EXP_REGIONS = [
+  { id:'guerrero', name:'Brecha de Guerrero, México', center:[17.0,-100.5], bbox:[16.0,-101.5,18.0,-99.0] },
+  { id:'cascadia', name:'Cascadia, EE. UU./Canadá', center:[45.0,-124.5], bbox:[40.0,-128.0,50.0,-122.0] },
+  { id:'nankai', name:'Fosa de Nankai, Japón', center:[33.0,136.5], bbox:[31.0,133.0,35.0,139.0] },
+  { id:'chile', name:'Chile centro-sur', center:[-35.0,-72.5], bbox:[-38.0,-75.0,-30.0,-70.0] },
+  { id:'sunda', name:'Fosa de Sunda, Indonesia', center:[-8.0,110.0], bbox:[-11.0,105.0,-5.0,116.0] },
+];
+
+async function storageGet(key){
+  try{
+    if (!window.storage) return null;
+    const r = await window.storage.get(key, false);
+    return r ? JSON.parse(r.value) : null;
+  }catch(e){ return null; }
+}
+async function storageSet(key, value){
+  try{
+    if (!window.storage) return false;
+    await window.storage.set(key, JSON.stringify(value), false);
+    return true;
+  }catch(e){ return false; }
+}
+async function storageListPredictions(){
+  try{
+    if (!window.storage) return [];
+    const list = await window.storage.list('exp_pred:', false);
+    if (!list || !list.keys) return [];
+    const out = [];
+    for (const k of list.keys){
+      const v = await storageGet(k);
+      if (v) out.push(v);
+    }
+    return out.sort((a,b) => b.ts - a.ts);
+  }catch(e){ return []; }
+}
+
+/* ---- Valor-b (Gutenberg-Richter), estimador de máxima verosimilitud de Aki/Utsu ----
+   b = log10(e) / (Mmedia - (Mc - deltaM/2))
+   Un valor-b bajo (<0.8) suele asociarse a un régimen de mayor esfuerzo acumulado;
+   valores típicos globales rondan 1.0. Requiere una muestra mínima para ser confiable. */
+function computeBValue(mags, Mc, deltaM=0.1){
+  if (mags.length < 15) return null; // muestra insuficiente, no se reporta
+  const meanMag = mags.reduce((a,b)=>a+b,0) / mags.length;
+  const b = Math.LOG10E / (meanMag - (Mc - deltaM/2));
+  return (b > 0 && b < 3) ? b : null;
+}
+
+/* ---- Proxy simplificado tipo ETAS: productividad de réplicas ----
+   Por cada evento "disparador" M>=5.0, cuenta cuántos eventos M>=4.5 ocurrieron
+   después dentro de 10 días y del mismo bbox. No es un ajuste ETAS real (eso requiere
+   máxima verosimilitud sobre el catálogo completo), es una aproximación de productividad. */
+function computeProductivity(events){
+  const triggers = events.filter(e => e.mag >= 5.0);
+  if (triggers.length === 0) return null;
+  let totalAftershocks = 0;
+  triggers.forEach(t => {
+    totalAftershocks += events.filter(e =>
+      e !== t && e.time > t.time && (e.time - t.time) < 10*24*60*60*1000
+    ).length;
+  });
+  return totalAftershocks / triggers.length;
+}
+
+/* ---- Proxy de aceleración de sismicidad (patrón tipo premonitor) ----
+   Compara la tasa de sismos M>=4.0 en los últimos 30 días contra la tasa base de los
+   60 días anteriores, en la misma zona. Una aceleración sostenida es uno de los patrones
+   que estudios recientes de foreshocks buscan, pero por sí sola NO confirma un premonitor real. */
+async function computeAcceleration(region){
+  try{
+    const end = Date.now();
+    const start90 = end - 90*24*60*60*1000;
+    const url = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${new Date(start90).toISOString()}&endtime=${new Date(end).toISOString()}&minmagnitude=4.0&minlatitude=${region.bbox[0]}&maxlatitude=${region.bbox[2]}&minlongitude=${region.bbox[1]}&maxlongitude=${region.bbox[3]}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const times = (data.features||[]).map(f => f.properties.time);
+    const cutoff30 = end - 30*24*60*60*1000;
+    const recent30 = times.filter(t => t >= cutoff30).length;
+    const prior60 = times.filter(t => t < cutoff30).length;
+    const baseRatePer30d = prior60 / 2;
+    const acceleration = baseRatePer30d > 0.5 ? recent30 / baseRatePer30d : (recent30 > 2 ? 2 : 1);
+    return { acceleration, recent30, baseRatePer30d };
+  }catch(e){ return { acceleration: 1, recent30:0, baseRatePer30d:0 }; }
+}
+
+/* ---- Deformación cortical real vía GNSS (Nevada Geodetic Laboratory, a través del proxy propio) ----
+   Requiere que el usuario haya desplegado /gnss-proxy y pegado su URL en la interfaz.
+   Sin proxy configurado, se devuelve null y el heurístico usa un valor neutro. */
+async function computeDeformation(region){
+  const proxyUrl = (await storageGet('gnss_proxy_url'))?.url || localFallbackProxyUrl;
+  if (!proxyUrl) return null;
+  try{
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const url = `${proxyUrl.replace(/\/$/,'')}/api/gnss?minlat=${region.bbox[0]}&maxlat=${region.bbox[2]}&minlon=${region.bbox[1]}&maxlon=${region.bbox[3]}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.region_horizontal_velocity_mm_yr) return null;
+    return {
+      velocityMmYr: data.region_horizontal_velocity_mm_yr,
+      stationCount: data.station_count
+    };
+  }catch(e){ return null; }
+}
+let localFallbackProxyUrl = null;
+
+async function computeExperimentalScore(region, monthFeatures){
+  // Actividad reciente real (M4.5+ últimos 30 días) y energía real liberada dentro del bbox
+  // monthFeatures ya viene descargado una sola vez desde renderExperimentalRegions
+  const inRegionRaw = monthFeatures.filter(f=>{
+    const [lon,lat] = f.geometry.coordinates;
+    return lat>=region.bbox[0] && lat<=region.bbox[2] && lon>=region.bbox[1] && lon<=region.bbox[3];
+  });
+  const inRegion = inRegionRaw.map(f => ({ mag: f.properties.mag || 0, time: f.properties.time }));
+  const recentCount = inRegion.length;
+  const recentEnergy = inRegion.reduce((s,e) => s + energyJoules(e.mag), 0);
+
+  const bValue = computeBValue(inRegion.map(e => e.mag), 4.5);
+  const productivity = computeProductivity(inRegion);
+  const { acceleration, recent30 } = await computeAcceleration(region);
+  const deformation = await computeDeformation(region);
+
+  // Historial real M6.5+ desde 1970 en la región (USGS FDSNWS query, datos reales)
+  let yearsSinceLast = null, histCount = 0, histEnergySum = 0;
+  try{
+    const url = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=1970-01-01&minmagnitude=6.5&minlatitude=${region.bbox[0]}&maxlatitude=${region.bbox[2]}&minlongitude=${region.bbox[1]}&maxlongitude=${region.bbox[3]}&orderby=time`;
+    const res = await fetch(url);
+    const data = await res.json();
+    histCount = (data.features||[]).length;
+    histEnergySum = (data.features||[]).reduce((s,f) => s + energyJoules(f.properties.mag || 0), 0);
+    if (histCount > 0){
+      const lastTime = data.features[data.features.length-1].properties.time;
+      yearsSinceLast = (Date.now() - lastTime) / (1000*60*60*24*365.25);
+    }
+  }catch(e){}
+
+  // Factor de "presupuesto energético": energía histórica típica por evento M6.5+ en la zona,
+  // comparada contra la energía liberada recientemente. Si hace mucho no se libera energía
+  // comparable a un evento típico, el heurístico sube (idea de "brecha sísmica" / seismic gap).
+  const typicalEventEnergy = histCount > 0 ? histEnergySum / histCount : energyJoules(6.5);
+  const energyGapFactor = Math.min(1, recentEnergy / typicalEventEnergy < 0.05 && yearsSinceLast != null
+    ? Math.min(1, yearsSinceLast / 15) : recentEnergy > 0 ? Math.min(1, recentEnergy/typicalEventEnergy) : 0.3);
+
+  const avgRecurrence = histCount > 1 ? Math.max(5, (54)/histCount) : 20; // estimación tosca, solo para el heurístico
+  const recurrenceFactor = yearsSinceLast != null ? Math.min(1, yearsSinceLast / avgRecurrence) : 0.4;
+  const swarmFactor = Math.min(1, recentCount / 10);
+
+  // b-value bajo => más estrés => factor alto. b=1.0 -> 0, b=0.5 -> 1. Si no hay muestra suficiente, factor neutro.
+  const bValueFactor = bValue != null ? Math.min(1, Math.max(0, (1.0 - bValue) / 0.5)) : 0.4;
+  // Productividad de réplicas alta => factor alto. Sin eventos disparadores, factor neutro-bajo.
+  const productivityFactor = productivity != null ? Math.min(1, productivity / 5) : 0.25;
+  // Aceleración >1 => se está acelerando la sismicidad respecto a su línea base reciente.
+  const accelerationFactor = Math.min(1, Math.max(0, (acceleration - 1) / 2));
+  // Deformación GNSS: velocidades horizontales típicas de zonas de subducción activa rondan 20-80 mm/año;
+  // zonas intraplaca, unos pocos mm/año. Sin proxy configurado, factor neutro.
+  const deformationFactor = deformation != null ? Math.min(1, deformation.velocityMmYr / 60) : 0.4;
+
+  const score = Math.round(Math.min(92, Math.max(6, 100 * (
+    0.22*recurrenceFactor + 0.13*swarmFactor + 0.18*energyGapFactor +
+    0.13*bValueFactor + 0.13*productivityFactor + 0.09*accelerationFactor +
+    0.12*deformationFactor
+  ))));
+
+  return {
+    score, recentCount, histCount, yearsSinceLast, recentEnergy, typicalEventEnergy,
+    bValue, productivity, acceleration, recent30, deformation
+  };
+}
+
+async function renderExperimentalRegions(){
+  const wrap = document.getElementById('exp-regions');
+  wrap.innerHTML =
+    '<div id="exp-highlight" style="font-size:11px;color:#c9b8ff;background:#1c1533;border:1px solid var(--exp-dim);border-radius:8px;padding:8px 10px;margin-bottom:10px;">Calculando zona con mayor déficit de energía liberada…</div>' +
+    EXP_REGIONS.map(r => `
+    <div class="exp-region" id="region-${r.id}">
+      <div class="exp-region-top">
+        <span class="exp-region-name">${r.name}</span>
+        <span class="exp-score mono">–</span>
+      </div>
+      <div class="exp-bar-track"><div class="exp-bar-fill" style="width:0%"></div></div>
+      <div class="exp-meta"><span>calculando…</span><span></span></div>
+      <div class="exp-meta" style="margin-top:4px;"><span></span><span></span></div>
+      <div class="exp-meta" style="margin-top:4px;"><span></span></div>
+    </div>
+  `).join('');
+
+  let monthFeatures = [];
+  try{
+    const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson');
+    const data = await res.json();
+    monthFeatures = data.features || [];
+  }catch(e){}
+
+  const results = [];
+  for (const r of EXP_REGIONS){
+    const out = await computeExperimentalScore(r, monthFeatures);
+    const { score, histCount, yearsSinceLast, recentEnergy, typicalEventEnergy, bValue, productivity, acceleration, deformation } = out;
+    results.push({ r, score, recentEnergy, typicalEventEnergy });
+    const el = document.getElementById('region-' + r.id);
+    el.querySelector('.exp-score').textContent = score + '%';
+    el.querySelector('.exp-bar-fill').style.width = score + '%';
+    const metas = el.querySelectorAll('.exp-meta');
+    metas[0].innerHTML =
+      '<span>M6.5+ hist.: ' + histCount + (yearsSinceLast!=null ? ' · último hace ' + yearsSinceLast.toFixed(1) + ' a.' : '') + '</span>' +
+      '<span>energía 30d: ' + fmtEnergy(recentEnergy) + '</span>';
+    metas[1].innerHTML =
+      '<span>valor-b: ' + (bValue != null ? bValue.toFixed(2) : 'muestra insuf.') + '</span>' +
+      '<span>productividad: ' + (productivity != null ? productivity.toFixed(1) : '–') + ' · acel. ' + acceleration.toFixed(1) + 'x</span>';
+    metas[2].innerHTML = deformation != null
+      ? '<span>GNSS: ' + deformation.velocityMmYr.toFixed(1) + ' mm/año (' + deformation.stationCount + ' estaciones NGL)</span>'
+      : '<span style="color:#5f558a;">GNSS: sin proxy configurado</span>';
+  }
+
+  const top = results.slice().sort((a,b) => b.score - a.score)[0];
+  if (top){
+    document.getElementById('exp-highlight').innerHTML =
+      '<b>Zona con mayor puntaje experimental: ' + top.r.name + ' (' + top.score + '%)</b><br>' +
+      'Liberó ' + fmtEnergy(top.recentEnergy) + ' en los últimos 30 días, frente a ~' + fmtEnergy(top.typicalEventEnergy) + ' que libera en promedio un evento M6.5+ histórico en esa zona. ' +
+      'Un déficit sostenido sugiere acumulación de energía elástica ("brecha sísmica"), pero esto NO indica cuándo ocurrirá un sismo — puede tardar años o décadas.';
+  }
+}
+
+async function generateTestPrediction(){
+  const btn = document.getElementById('exp-generate');
+  btn.disabled = true; btn.textContent = 'Generando…';
+  let monthFeatures = [];
+  try{
+    const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson');
+    const data = await res.json();
+    monthFeatures = data.features || [];
+  }catch(e){}
+  const entries = [];
+  for (const r of EXP_REGIONS){
+    const { score } = await computeExperimentalScore(r, monthFeatures);
+    const id = 'exp_pred:' + r.id + '_' + Date.now();
+    const entry = { id, region: r.id, regionName: r.name, bbox: r.bbox, score, ts: Date.now(), resolved:false, outcome:null };
+    await storageSet(id, entry);
+    entries.push(entry);
+  }
+  btn.disabled = false; btn.textContent = 'Generar predicción de prueba ahora';
+  await renderTrackLog();
+}
+
+async function checkOutcomes(){
+  const btn = document.getElementById('exp-check');
+  btn.disabled = true; btn.textContent = 'Revisando…';
+  const all = await storageListPredictions();
+  for (const pred of all){
+    if (pred.resolved) continue;
+    const daysSince = (Date.now() - pred.ts) / (1000*60*60*24);
+    if (daysSince < 1) continue; // deja al menos 1 día antes de poder resolver
+    try{
+      const url = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${new Date(pred.ts).toISOString()}&minmagnitude=7&minlatitude=${pred.bbox[0]}&maxlatitude=${pred.bbox[2]}&minlongitude=${pred.bbox[1]}&maxlongitude=${pred.bbox[3]}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const occurred = (data.features||[]).length > 0;
+      if (occurred){
+        pred.resolved = true;
+        pred.outcome = pred.score >= 60 ? 'hit' : 'miss';
+        await storageSet(pred.id, pred);
+      }
+      // si no ocurrió, se deja pendiente indefinidamente (es lo honesto: aún no hay resultado)
+    }catch(e){}
+  }
+  btn.disabled = false; btn.textContent = 'Revisar aciertos / fallos del historial';
+  await renderTrackLog();
+}
+
+async function renderTrackLog(){
+  const all = await storageListPredictions();
+  const log = document.getElementById('track-log');
+  if (all.length === 0){
+    log.innerHTML = '<div class="track-row"><span>Sin predicciones registradas aún.</span></div>';
+    document.getElementById('exp-accuracy').textContent = '0/0 resueltas';
+    return;
+  }
+  log.innerHTML = all.slice(0, 40).map(p => {
+    const date = new Date(p.ts).toLocaleDateString('es-MX');
+    let statusHtml;
+    if (!p.resolved) statusHtml = '<span class="track-status pend">pendiente</span>';
+    else if (p.outcome === 'hit') statusHtml = '<span class="track-status hit">acierto</span>';
+    else statusHtml = '<span class="track-status miss">fallo</span>';
+    return '<div class="track-row"><span>' + date + ' · ' + p.regionName + ' (' + p.score + '%)</span>' + statusHtml + '</div>';
+  }).join('');
+  const resolved = all.filter(p => p.resolved);
+  const hits = resolved.filter(p => p.outcome === 'hit').length;
+  document.getElementById('exp-accuracy').textContent = hits + '/' + resolved.length + ' resueltas';
+}
+
+document.getElementById('exp-generate').addEventListener('click', generateTestPrediction);
+document.getElementById('exp-check').addEventListener('click', checkOutcomes);
+
+/* ---- Configuración del proxy GNSS ---- */
+async function loadGnssProxyUrl(){
+  const stored = await storageGet('gnss_proxy_url');
+  const url = stored?.url || null;
+  localFallbackProxyUrl = url;
+  const input = document.getElementById('gnss-proxy-url');
+  const status = document.getElementById('gnss-status');
+  if (url){
+    input.value = url;
+    status.textContent = 'Configurado: ' + url + ' — la señal de deformación cortical GNSS está activa.';
+    status.style.color = '#9ad4b3';
+  }
+}
+document.getElementById('gnss-save').addEventListener('click', async () => {
+  const url = document.getElementById('gnss-proxy-url').value.trim();
+  const status = document.getElementById('gnss-status');
+  if (!url){
+    status.textContent = 'Escribe la URL pública de tu proxy desplegado (ver /gnss-proxy/README.md).';
+    status.style.color = '#7a6ea3';
+    return;
+  }
+  localFallbackProxyUrl = url;
+  const ok = await storageSet('gnss_proxy_url', { url });
+  status.textContent = ok
+    ? 'Guardado: ' + url + '. Recalculando zonas…'
+    : 'No se pudo guardar (persistencia no disponible fuera de claude.ai), pero queda activo para esta sesión.';
+  status.style.color = '#9ad4b3';
+  renderExperimentalRegions();
+});
+
+/* =========================================================
+   ARRANQUE
+========================================================= */
+fetchLiveFeed();
+fetchStats();
+loadGnssProxyUrl().then(() => {
+  renderExperimentalRegions();
+  renderTrackLog();
+});
+setInterval(fetchLiveFeed, 30000);
+setInterval(fetchStats, 5 * 60000);
+</script>
+</body>
+</html>
